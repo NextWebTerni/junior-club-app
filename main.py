@@ -1,12 +1,12 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import datetime
+from streamlit_gsheets import GSheetsConnection # Nuovo motore
 
 # --- 1. CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="Junior Club Terni", layout="wide", initial_sidebar_state="expanded")
 
-# --- 2. OPZIONE NUCLEARE ANTI-TRADUTTORE E CSS ---
+# --- 2. OPZIONE NUCLEARE ANTI-TRADUTTORE E CSS (Invariato) ---
 st.components.v1.html("""
     <script>
         window.parent.document.documentElement.lang = 'it';
@@ -131,27 +131,29 @@ st.markdown("""
 
 st.markdown('<div translate="no" class="notranslate">', unsafe_allow_html=True)
 
-# --- 3. DATABASE ---
-def init_db():
-    conn = sqlite3.connect('dati_circolo.db')
-    conn.execute('''CREATE TABLE IF NOT EXISTS soci 
-                 (nome_atleta TEXT, luogo_data_nascita TEXT, indirizzo TEXT, nome_genitore TEXT, codice_fiscale_genitore TEXT)''')
-    conn.commit()
-    conn.close()
+# --- 3. DATABASE (ORA GOOGLE SHEETS) ---
+# Creiamo la connessione
+conn_gs = st.connection("gsheets", type=GSheetsConnection)
 
 def get_soci():
-    conn = sqlite3.connect('dati_circolo.db')
-    df = pd.read_sql("SELECT * FROM soci ORDER BY nome_atleta ASC", conn)
-    conn.close()
-    return df
+    # Legge i dati dal foglio "soci". ttl=0 serve per avere i dati sempre aggiornati
+    return conn_gs.read(worksheet="soci", ttl=0)
 
 def aggiungi_socio_singolo(nome, nascita, indirizzo, genitore, cf):
-    conn = sqlite3.connect('dati_circolo.db')
-    conn.execute("INSERT INTO soci VALUES (?, ?, ?, ?, ?)", (nome.upper(), nascita.upper(), indirizzo.upper(), genitore.upper(), cf.upper()))
-    conn.commit()
-    conn.close()
+    df_attuale = get_soci()
+    nuova_riga = pd.DataFrame([{
+        "nome_atleta": nome.upper(),
+        "luogo_data_nascita": nascita.upper(),
+        "indirizzo": indirizzo.upper(),
+        "nome_genitore": genitore.upper(),
+        "codice_fiscale_genitore": cf.upper()
+    }])
+    # Unisce il vecchio database con il nuovo nome
+    df_finale = pd.concat([df_attuale, nuova_riga], ignore_index=True)
+    # Aggiorna il foglio Google
+    conn_gs.update(worksheet="soci", data=df_finale)
 
-init_db()
+# Carichiamo i dati iniziali
 df_soci = get_soci()
 
 # --- 4. MENU LATERALE ---
@@ -239,7 +241,6 @@ if menu == "📝 Emissione Ricevuta":
                 
                 st.success("✅ Documento generato con successo. Scorri in basso e clicca il bottone scuro per stampare.")
                 
-                # HTML SULLO STESSO MARGINE, ZERO SPAZI!
                 html_ricevuta = f"""
 <div class="ricevuta-stampabile" style="background: white; border: 2px solid #FF6501; padding: 40px; max-width: 900px; margin: 30px auto; font-family: Arial, sans-serif; color: #FF6501; box-sizing: border-box; box-shadow: 0 10px 30px rgba(0,0,0,0.1);">
 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
@@ -351,7 +352,7 @@ elif menu == "👥 Anagrafica Clienti":
                     st.error("Il nome dell'allievo è obbligatorio.")
                 else:
                     aggiungi_socio_singolo(nuovo_nome, nuovo_nascita, nuovo_indirizzo, nuovo_genitore, nuovo_cf)
-                    st.success("Allievo aggiunto con successo!")
+                    st.success("Allievo aggiunto con successo su Google Sheets!")
                     st.rerun()
 
     with tab2:
@@ -368,10 +369,9 @@ elif menu == "👥 Anagrafica Clienti":
             df_nuovo.columns = df_nuovo.columns.astype(str).str.lower().str.strip()
             df_nuovo.rename(columns={'nome atleta': 'nome_atleta', 'luogo/data di nascita': 'luogo_data_nascita', 'nome genitore x detrazione': 'nome_genitore', 'cod. fiscale genitore': 'codice_fiscale_genitore'}, inplace=True)
             if st.button("SOVRASCRIVI DATABASE CON FILE CSV", type="primary"):
-                conn = sqlite3.connect('dati_circolo.db')
-                df_nuovo.to_sql('soci', conn, if_exists='replace', index=False)
-                conn.close()
-                st.success("Database aggiornato!")
+                # Aggiorna direttamente il foglio Google sovrascrivendo tutto
+                conn_gs.update(worksheet="soci", data=df_nuovo)
+                st.success("Database su Google Sheets aggiornato!")
                 st.rerun()
 
 # --- 7. SEZIONE STORICO ---
